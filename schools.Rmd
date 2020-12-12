@@ -1,0 +1,106 @@
+---
+title: "Schools"
+author: "Lucy M Li"
+date: "14/11/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+# tidyverse
+library(dplyr)
+library(readr)
+library(tidyr)
+library(magrittr)
+# plotting libraries
+library(ggplot2)
+library(ggmap)
+# spatial libraries
+library(sp)
+library(rgdal)
+library(rgeos)
+```
+
+## Read in data
+
+```{r bay-area-counties}
+bay_area_counties <- c("Alameda", "San Francisco", "San Mateo", "Santa Clara")
+# SOC school types filter
+soc_types <- c("08", "60", "61", "62", "63", "64", "65", "66", "67")
+```
+
+
+```{r shapefiles}
+shapefile <- readOGR("California_School_District_Areas_2018-19-shp", "DistrictAreas1819") %>% spTransform(CRS("+proj=longlat +datum=WGS84"))
+shapefile <- shapefile[shapefile@data$CountyName %in% bay_area_counties, ]
+shapefile_counties_df <- fortify(shapefile, region="CountyName")
+shapefile_df <- fortify(shapefile)
+```
+
+```{r schools-data, message=FALSE}
+ca_sch <- read_tsv("pubschls.txt") %>%
+  filter(County %in% bay_area_counties, StatusType=="Active", SOC %in% soc_types) %>%
+  mutate(Longitude=as.numeric(Longitude), Latitude=as.numeric(Latitude)) %>%
+  filter(Longitude>=min(shapefile_df$long),
+         Longitude<=max(shapefile_df$long),
+         Latitude>=min(shapefile_df$lat),
+         Latitude<=max(shapefile_df$lat))
+ca_districts <- read_tsv("pubdistricts.txt") %>% filter(County %in% bay_area_counties)
+```
+
+```{r annual-data, message=FALSE, warning=FALSE}
+# https://www.cde.ca.gov/ta/ac/cm/datafiles2019.asp
+annual_data <- list()
+for (x in list.files("annual_data", full.names=TRUE)) {
+  var_name <- strsplit(basename(x), ".", fixed=TRUE)[[1]][1]
+  eval(parse(text=paste0("annual_data$", var_name, " <- read_delim('", x, "', delim='", 
+                         ifelse(grepl("priority", x), "|", "\t"), "')")))
+  col_name <- grep("cds", names(annual_data[[var_name]]), ignore.case=TRUE, value=TRUE)[1]
+  annual_data[[var_name]] %<>% `[`(.[[col_name]] %in% ca_sch$CDSCode, )
+}
+```
+
+
+## School stats
+
+```{r graduation}
+# https://www.cde.ca.gov/ta/ac/cm/gradindicator19.asp
+annual_data$graduation2019 %>%
+  filter(studentgroup=="AS", !is.na(currdenom)) %>%
+  select(cds, grad_rate=currnumer/currdenom)
+```
+
+
+
+## Maps
+
+```{r get-map-data}
+map <- get_map(location = c(min(shapefile_df$long), 
+                            min(shapefile_df$lat), 
+                            max(shapefile_df$long),
+                            max(shapefile_df$lat)))
+```
+
+
+```{r map-plot}
+districts_plot <- ggmap(map, extent = "normal", maprange = FALSE) +
+  theme_nothing() +
+  geom_polygon(data = shapefile_df, 
+              aes(x=long, y=lat, group=group),
+              color='black', size = .2, alpha=0) +
+  geom_polygon(data = shapefile_counties_df, 
+               aes(x=long, y=lat, group=group, fill=id),
+               color='black', size = .2, alpha=.5)
+schools_plot <- districts_plot +
+  geom_point(data = ca_sch,
+             aes(x=Longitude, y=Latitude),
+             size=2, shape='*')
+  
+schools_plot
+```
+
+
+
+
